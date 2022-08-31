@@ -16,7 +16,6 @@ class _Config(_MetaConst):
     EPOCH = 200
     LEARNING_RATE = 0.01
     WEIGHT_DECAY = 5e-4
-    LOGGER_LEVEL = 'WARNING'
 
     def __init__(self):
         super(_Config, self).__init__()
@@ -40,4 +39,4 @@ class _AttributeAccessError(Exception):
         super(_AttributeAccessError, self).__init__(msg)
 
 
-config = _Config()
+CONFIG = _Config()

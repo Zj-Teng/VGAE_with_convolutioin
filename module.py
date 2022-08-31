@@ -1,12 +1,9 @@
 import torch
 import torch.nn.functional as func
 
-from dgl.nn.pytorch.conv import SAGEConv
+from dgl.nn.pytorch.conv import SAGEConv, GATv2Conv
 from torch import nn
-from utils import config
-from utils.clog import Logger
-
-logger = Logger(name='module', level=config.LOGGER_LEVEL).get_logger
+from config import CONFIG
 
 
 class InferNet(nn.Module):
@@ -58,33 +55,21 @@ class InferNet(nn.Module):
         self.nodes_embedding = nn.Parameter(self.nodes_embedding)
 
     def encoder(self, graph, feats):
-        r"""
-
-        :param graph:
-        :return:
-        """
 
         h = self.base_encoder[0](graph, self.nodes_embedding)
         h = self.base_encoder[1](graph, h)
         h = self.base_encoder[2](graph, h)
         h = self.norm_1(h)
-        logger.info(self.nodes_embedding.shape)
         self.mean = self.sage_mu(graph, h)
         self.log_std = self.sage_log_std(graph, h)
-        logger.debug('mean:{}\nlog_std:{}'.format(self.mean, self.log_std))
 
-        gaussian_noise = torch.randn(self.nodes_embedding.size(0), self.out_feats).to(config.DEVICE)
-        sampled_z = self.mean + gaussian_noise * torch.exp(self.log_std).to(config.DEVICE)
+        gaussian_noise = torch.randn(self.nodes_embedding.size(0), self.out_feats).to(CONFIG.DEVICE)
+        sampled_z = self.mean + gaussian_noise * torch.exp(self.log_std).to(CONFIG.DEVICE)
         sampled_z = self.norm_2(sampled_z)
 
         return sampled_z
 
     def decoder(self, z):
-        """
-
-        :param z:
-        :return:
-        """
 
         adj_rec = _self_conv(z)
         adj_rec = self.norm_3(adj_rec)
@@ -97,7 +82,6 @@ class InferNet(nn.Module):
             self.nodes_embedding = ori_features
 
         z = self.encoder(g, ori_features)
-        logger.info('z:{}'.format(z.shape))
         adj_rec = self.decoder(z)
 
         return adj_rec
@@ -160,21 +144,38 @@ class DenseNet(nn.Module):
         return output
 
 
+class GATAutoEncoder(nn.Module):
+
+    def __init__(self, in_feats, hidden_feats, out_feats, num_head):
+        super(GATAutoEncoder, self).__init__()
+
+        self.base_encoder = nn.Sequential(
+            GATv2Conv(in_feats=in_feats, out_feats=out_feats, num_heads=num_head, feat_drop=0.2, attn_drop=0.2),
+            GATv2Conv(in_feats=in_feats * num_head, out_feats=out_feats, num_heads=num_head, feat_drop=0.2, attn_drop=0.2),
+            GATv2Conv(in_feats=in_feats, out_feats=out_feats, num_heads=num_head, feat_drop=0.2, attn_drop=0.2)
+        )
+        self.mu = SAGEConv(
+            in_feats=hidden_feats, out_feats=out_feats, activation=lambda x: x, aggregator_type='mean'
+        )
+        self.log_std = SAGEConv(
+            in_feats=hidden_feats, out_feats=out_feats, activation=lambda x: x, aggregator_type='mean'
+        )
+
+    def encoder(self):
+        pass
+
+    def decoder(self):
+        pass
+
+    def forward(self, x, adj):
+        pass
+
+
 def _self_conv(x):
-    """self_convolution implemented by FFT
 
-    :param x: (Tensor) It indicates input data with shape of N*M
-    :return:
-        (Tensor) It indicates Impulse response matrix with shape of N*N
-    """
-
-    # Implement_1
-    signal, moment = x, torch.flip(x, dims=(1,))
+    signal = torch.fft.fft2(input=x, norm='ortho')
+    moment = torch.fft.fft2(input=x, norm='ortho')
     adj_rec = torch.matmul(moment, signal.t())
-
-    # signal = torch.fft.fft2(input=x, norm='ortho')
-    # moment = torch.fft.fft2(input=x, norm='ortho')
-    # adj_rec = torch.matmul(moment, signal.t())
-    # adj_rec = torch.fft.ifft2(input=adj_rec, norm='ortho').to(torch.float32)
+    adj_rec = torch.fft.ifft2(input=adj_rec, norm='ortho').to(torch.float32)
 
     return adj_rec

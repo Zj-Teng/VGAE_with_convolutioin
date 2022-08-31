@@ -1,27 +1,49 @@
-import torch
 import dgl
+import torch
 import torch.nn.functional as func
-# import scipy
-
 from dgl.dataloading import GraphDataLoader
-from utils import config
-from utils.clog import Logger
-from loder import Dataset
-from scorer import *
 from torch import Tensor
 from torch.optim import Adam
-from module import InferNet
 
-logger = Logger(name='main', level=config.LOGGER_LEVEL).get_logger
-logger.info(config.DEVICE)
+from loder import Dataset
+from module import InferNet
+from scorer import *
+from config import CONFIG
+
+# import scipy
+
+
+class EarlyStopping:
+    def __init__(self, patience=10):
+        self.patience = patience
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+
+    def step(self, acc, model):
+        score = acc
+        if self.best_score is None:
+            self.best_score = score
+            self.save_checkpoint(model)
+        elif score < self.best_score:
+            self.counter += 1
+            print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_score = score
+            self.save_checkpoint(model)
+            self.counter = 0
+        return self.early_stop
+    def save_checkpoint(self, model):
+        '''Saves model when validation loss decrease.'''
+        torch.save(model.state_dict(), 'es_checkpoint.pt')
 
 
 def _mask_test_edges(graph, adj):
     src, dst = graph.edges()
     edges_all = torch.stack([src, dst], dim=0)
-    logger.debug('edges_all:{}\n'.format(edges_all))
     edges_all = edges_all.t().cpu().numpy()
-    logger.debug('edges_all:{}\n'.format(edges_all))
     num_test = int(np.floor(edges_all.shape[0] * 0.2))
     num_val = int(np.floor(edges_all.shape[0] * 0.1))
 
@@ -78,8 +100,6 @@ def _mask_test_edges(graph, adj):
                 continue
         val_edges_false.append([idx_i, idx_j])
 
-    logger.debug('test_edges_false:\n{}'.format(test_edges_false))
-    logger.debug('val_edges_false:\n{}'.format(val_edges_false))
     assert ~ismember(test_edges_false, edges_all), 'false test edges occur in true edges'
     assert ~ismember(val_edges_false, edges_all), 'false valid edges occur in true edges'
     assert ~ismember(val_edges, train_edges), 'valid edges occur in train edges'
@@ -94,7 +114,7 @@ def _compute_loss_para(adj):
     pos_weight = ((adj.shape[0] * adj.shape[0] - adj.sum()) / adj.sum())
     norm = adj.shape[0] * adj.shape[0] / float((adj.shape[0] * adj.shape[0] - adj.sum()) * 2)
     weight_mask = adj.view(-1) == 1
-    weight_tensor = torch.ones(weight_mask.size(0)).to(config.DEVICE)
+    weight_tensor = torch.ones(weight_mask.size(0)).to(CONFIG.DEVICE)
 
     weight_tensor[weight_mask] = pos_weight
     return weight_tensor, norm
@@ -111,7 +131,7 @@ def train(model=None, dst=None, optimizer=Adam) -> None:
 
     assert model is not None and dst is not None, 'model or dst is None'
 
-    optimizer = optimizer(model.parameters(), config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
+    optimizer = optimizer(model.parameters(), CONFIG.LEARNING_RATE, weight_decay=CONFIG.WEIGHT_DECAY)
     loader = GraphDataLoader(dst)
 
     train_acc, val_roc, val_ap, test_roc, test_ap = [], [], [], [], []
@@ -125,10 +145,9 @@ def train(model=None, dst=None, optimizer=Adam) -> None:
     train_edge_idx, val_edges, val_edges_false, test_edges, test_edges_false = _mask_test_edges(graph, adj_orig)
 
     # create train graph
-    train_edge_idx = torch.tensor(train_edge_idx, dtype=torch.int32).to(config.DEVICE)
+    train_edge_idx = torch.tensor(train_edge_idx, dtype=torch.int32).to(CONFIG.DEVICE)
     train_graph = dgl.edge_subgraph(graph, train_edge_idx, relabel_nodes=False)
-    adj = train_graph.adjacency_matrix().to_dense().to(config.DEVICE)
-
+    adj = train_graph.adjacency_matrix().to_dense().to(CONFIG.DEVICE)
     # compute loss parameters
     weight_tensor, norm = _compute_loss_para(adj)
 
@@ -144,7 +163,7 @@ def train(model=None, dst=None, optimizer=Adam) -> None:
         threshold = None
         print('Total Parameters:{}'.format(sum([p.nelement() for p in model.parameters()])))
 
-        for epoch in range(config.EPOCH):
+        for epoch in range(CONFIG.EPOCH):
             model.train()
             # create training component
             logits = model.forward(g, feats)
@@ -156,7 +175,7 @@ def train(model=None, dst=None, optimizer=Adam) -> None:
                     1 + 2 * model.log_std - model.mean ** 2 - torch.exp(model.log_std) ** 2
             ).sum(1).mean()
             loss -= kl_divergence
-            loss += func.mse_loss(feats, model.nodes_embedding)
+            # loss += func.mse_loss(feats, model.nodes_embedding)
 
             # backward
             optimizer.zero_grad()
@@ -165,6 +184,7 @@ def train(model=None, dst=None, optimizer=Adam) -> None:
 
             train_acc.append(get_acc(logits, adj, threshold=threshold))
 
+            model.eval()
             val_roc_tmp, val_ap_tmp = get_scores(val_edges, val_edges_false, logits)
             val_roc.append(val_roc_tmp)
             val_ap.append(val_ap_tmp)
@@ -211,7 +231,7 @@ def test(model=None, dst=None):
         feats = g.ndata.pop('x')
 
         logits = model(dst.graph, feats)
-        threshold = _calc_threshold(logits, ratio=90)
+        threshold = _calc_threshold(logits, ratio=95)
 
         print(logits)
         confused_matrix = get_confusion_matrix(logits, adj_orig, threshold=threshold)
@@ -250,34 +270,29 @@ class _LossCalculator(object):
         return func.mse_loss(input, target)
 
 
-def _calc_threshold(x, ratio=95):
-    r""" Figure out threshold from positive number.
+def _calc_threshold(x, ratio=98):
+    r"""
 
     :param x: (Tensor) Adjacency matrix
     :return:
     """
     logits = x.view(-1).detach().cpu().numpy()
     threshold = np.percentile([lgs for lgs in logits], ratio)
+    if threshold < 0.:
+        threshold = 0.
 
     return threshold
 
 
 if __name__ == '__main__':
-    base_model = InferNet(
-        in_feats=21, out_feats=21, hidden_feats=42, shape=(100, 21), rand_init=False
-    ).to(config.DEVICE)
+    model = InferNet(
+        in_feats=805, out_feats=200, hidden_feats=400, shape=(1642, 805), rand_init=False
+    ).to(CONFIG.DEVICE)
     dataset1 = Dataset(
-        name='dr4_Insilico_1', raw_dir='./data/raw', save_dir='./data/processed',
-        data_file_name='D4_insilico_size100_1_timeseries.tsv',
-        edge_file_name='DREAM4_GoldStandard_InSilico_Size100_1.tsv',
-        num_nodes=100, num_sample=10
-    )
-    dataset2 = Dataset(
-        name='dr4_Insilico_2', raw_dir='./data/raw', save_dir='./data/processed',
-        data_file_name='D4_insilico_size100_2_timeseries.tsv',
-        edge_file_name='DREAM4_GoldStandard_InSilico_Size100_2.tsv',
-        num_nodes=100, num_sample=10
+        name='dr5_Insilico_1', raw_dir='./data/raw', save_dir='./data/processed',
+        data_file_name='D5_net1_expression_data.tsv',
+        edge_file_name='DREAM5_NetworkInference_GoldStandard_Network1 - in silico.tsv',
+        num_nodes=1642, num_sample=1
     )
 
-    train(base_model, dataset1)
-    test(base_model, dataset2)
+    train(model, dataset1)
