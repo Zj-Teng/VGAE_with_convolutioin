@@ -1,12 +1,14 @@
 import os
 
 import dgl
+import networkx as nx
 import numpy as np
 import pandas as pd
 import torch
 from dgl.data import DGLDataset
 from dgl.data.utils import save_graphs, load_graphs
 from scipy.sparse import coo_matrix
+from sklearn.decomposition import FastICA
 
 
 def _sc_parser(exp_file, net_file):
@@ -24,12 +26,10 @@ def _sc_parser(exp_file, net_file):
     # print(gene_frame)
     adj = np.zeros(shape=(n_gene, n_gene), dtype=int)
     net_frame = pd.read_csv(net_file, header=0)
-    # print(net_frame)
 
+    # print(net_frame)
     for r in net_frame.itertuples():
         adj[gene_frame.gene_ids[r[1]]][gene_frame.gene_ids[r[2]]] = 1
-    adj = coo_matrix(adj)
-    print(adj)
 
     return features, adj, gene_frame
 
@@ -42,21 +42,38 @@ def _dr_network_parser(file):
     pass
 
 
-def _split(net, ratio):
-    print(net.shape)
-    num_edges = net.shape[0]
-    num_train, num_test, num_valid = [num_edges * r for r in ratio]
-    idx = np.array([i for i in range(num_edges)], dtype=int)
-    print(idx)
-    np.random.shuffle(idx)
-    print(idx)
+def _split(net, ratio=None):
+    if ratio is None:
+        ratio = [0.6, 0.2, 0.2]
 
+    g = nx.from_numpy_array(net, create_using=nx.DiGraph)
+    edge_list = nx.to_edgelist(g)
+    edge_list = list(edge_list)
+    num_edges = len(edge_list)
+
+    num_train, num_test, num_valid = [int(num_edges * r) for r in ratio]
+    idx = np.array([i for i in range(num_edges)], dtype=int)
+    np.random.shuffle(idx)
     train_idx = idx[: num_train]
     valid_idx = idx[num_train: num_train + num_valid]
     test_idx = idx[num_train + num_valid:]
 
+    train_edges = [edge_list[i] for i in train_idx]
+    valid_edges = [edge_list[i] for i in valid_idx]
+    test_edges = [edge_list[i] for i in test_idx]
 
-    return train_net, valid_net, test_net
+    def generator(num_nodes, edges):
+        graph = nx.DiGraph()
+        graph.add_nodes_from(range(num_nodes))
+        graph.add_edges_from(edges)
+
+        return graph
+
+    train_graph = generator(g.number_of_nodes(), train_edges)
+    valid_graph = generator(g.number_of_nodes(), valid_edges)
+    test_graph = generator(g.number_of_nodes(), test_edges)
+
+    return train_graph, valid_graph, test_graph
 
 
 class ScDataset(DGLDataset):
@@ -65,13 +82,17 @@ class ScDataset(DGLDataset):
             self, name: str = '', raw_dir: str = None, save_dir: str = None, force_reload: bool = False,
             verbose: bool = False, exp_file: str = None, net_file: str = None
     ):
-        super(ScDataset, self).__init__(
-            name=name, raw_dir=raw_dir, save_dir=save_dir, force_reload=force_reload, verbose=verbose
-        )
-
         self.exp_file = os.path.join(raw_dir, exp_file)
         self.net_file = os.path.join(raw_dir, net_file)
         self.graph = None
+        self.train_graph = None
+        self.valid_graph = None
+        self.test_graph = None
+        self.set = []
+
+        super(ScDataset, self).__init__(
+            name=name, raw_dir=raw_dir, save_dir=save_dir, force_reload=force_reload, verbose=verbose
+        )
 
     def __len__(self):
         return 1
@@ -79,15 +100,32 @@ class ScDataset(DGLDataset):
     def __getitem__(self, idx):
         return self.graph
 
+    def __str__(self):
+        pass
+
     def process(self):
+        print(self.exp_file)
         features, adj, gene_frame = _sc_parser(
             exp_file=self.exp_file,
             net_file=self.net_file
         )
 
-        self.graph = dgl.graph(adj)
-        features = torch.from_numpy(features)
-        self.graph.ndata['x'] = features
+        transformer = FastICA(n_components=200)
+        features = transformer.fit_transform(features)
+
+        train_graph, valid_graph, test_graph = _split(adj, ratio=[0.6, 0.2, 0.2])
+        adj = coo_matrix(adj, dtype=int)
+        self.graph = dgl.from_scipy(adj)
+        self.graph.ndata['x'] = torch.from_numpy(features)
+
+        self.train_graph = dgl.from_networkx(train_graph)
+        self.valid_graph = dgl.from_networkx(valid_graph)
+        self.test_graph = dgl.from_networkx(test_graph)
+
+        self.set.append(self.graph)
+        self.set.append(self.train_graph)
+        self.set.append(self.valid_graph)
+        self.set.append(self.test_graph)
 
     def has_cache(self):
         return os.path.exists(os.path.join(self.save_path, '{}.bin'.format(self.name)))
@@ -96,24 +134,24 @@ class ScDataset(DGLDataset):
         if not os.path.exists(self.save_path):
             os.makedirs(self.save_path)
 
-        graph_path = os.path.join(self.save_path, '{}.bin'.format(self.name))
-        save_graphs(graph_path, self.graph_sample)
-        print('file is saved in path:{}'.format(graph_path))
+        path = os.path.join(self.save_path, '{}.bin'.format(self.name))
+        save_graphs(path, self.set)
+
+        print('file is saved in path:{}'.format(self.save_path))
 
     def load(self):
         if not os.path.exists(self.save_path):
             raise FileNotFoundError('file not found')
 
-        graph_path = os.path.join(self.save_path, '{}.bin'.format(self.name))
-        self.graph = load_graphs(graph_path)
+        path = os.path.join(self.save_path, '{}.bin'.format(self.name))
+        self.set = load_graphs(path)
+        self.graph, self.train_graph, self.valid_graph, self.test_graph = self.set
+
+        print('file is loaded')
 
 
 if __name__ == '__main__':
-    features, adj, gene_frame = _sc_parser(
-        'data/raw/Benchmark Dataset/Lofgof Dataset/mESC/TFs+500/BL--ExpressionData.csv',
-        'data/raw/Benchmark Dataset/Lofgof Dataset/mESC/TFs+500/BL--network.csv'
+    dst = ScDataset(
+        name='mESC', raw_dir='./data/raw/Benchmark Dataset/Lofgof Dataset/mESC/TFs+500',
+        save_dir='./data/processed', exp_file='BL--ExpressionData.csv', net_file='BL--network.csv'
     )
-    train_net, valid_net, test_net = _split(adj, ratio=[0.6, 0.2, 0.2])
-    print(train_net)
-    print(valid_net)
-    print(test_net)
