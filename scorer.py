@@ -16,35 +16,6 @@ def get_acc(adj_rec, adj_label, threshold=0.3):
     return accuracy
 
 
-def get_scores(edges_pos, edges_neg, adj_rec):
-    """
-
-    :param edges_pos:
-    :param edges_neg:
-    :param adj_rec:
-    :return:
-        roc_score: (float)
-        ap_score: (float)
-    """
-
-    adj_rec = adj_rec.cpu()
-    # Predict on test set of edges
-    preds = []
-    for e in edges_pos:
-        preds.append(_sigmoid(adj_rec[e[0], e[1]].item()))
-
-    preds_neg = []
-    for e in edges_neg:
-        preds_neg.append(_sigmoid(adj_rec[e[0], e[1]].data))
-
-    preds_all = np.hstack([preds, preds_neg])
-    labels_all = np.hstack([np.ones(len(preds)), np.zeros(len(preds_neg))])
-    roc_score = roc_auc_score(labels_all, preds_all)
-    ap_score = average_precision_score(labels_all, preds_all)
-
-    return roc_score, ap_score
-
-
 def get_confusion_matrix(adj_rec, adj_label, threshold=0.3):
     """Calculate confused matrix from predict and ground truth.
 
@@ -61,7 +32,7 @@ def get_confusion_matrix(adj_rec, adj_label, threshold=0.3):
     return confusion_matrix(y_true=labels_all, y_pred=preds_all)
 
 
-def get_metrix(matrix, beta=1):
+def get_metric(matrix, beta=1):
     """Calculate metrix from confused matrix to estimate the efficience of module
 
     :param matrix: (np.array) It indicates confused_matrix.
@@ -97,10 +68,17 @@ def get_metrix(matrix, beta=1):
     return metrix
 
 
-def get_aupr(adj_rec, adj_label, threshold=0.3):
+def get_aupr(adj_rec, adj_label):
 
     labels_all = adj_label.view(-1).long().cpu().numpy()
-    preds_all = (adj_rec > threshold).view(-1).long().cpu().numpy()
+    preds_all = adj_rec.view(-1).long().cpu().numpy()
     precision, recall, thresholds = precision_recall_curve(labels_all, preds_all)
 
     return auc(precision, recall)
+
+
+def get_auroc(adj_rec, adj_label):
+    labels_all = adj_label.view(-1).long().cpu().numpy()
+    preds_all = adj_rec.view(-1).long().cpu().numpy()
+
+    return roc_auc_score(labels_all, preds_all)

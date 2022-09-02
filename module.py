@@ -43,27 +43,16 @@ class InferNet(nn.Module):
         if rand_init:
             self._init_nodes_rand_embedding(shape)
 
-    def _init_nodes_rand_embedding(self, shape):
-        """Initalize embeddings of nodes randomly.
-
-        :param shape: (turple) It indicates shape of features of nodes.
-        :return:
-            None
-        """
-
-        self.nodes_embedding = torch.randn(shape, dtype=torch.float32)
-        self.nodes_embedding = nn.Parameter(self.nodes_embedding)
-
     def encoder(self, graph, feats):
 
-        h = self.base_encoder[0](graph, self.nodes_embedding)
+        h = self.base_encoder[0](graph, feats)
         h = self.base_encoder[1](graph, h)
         h = self.base_encoder[2](graph, h)
         h = self.norm_1(h)
         self.mean = self.sage_mu(graph, h)
         self.log_std = self.sage_log_std(graph, h)
 
-        gaussian_noise = torch.randn(self.nodes_embedding.size(0), self.out_feats).to(CONFIG.DEVICE)
+        gaussian_noise = torch.randn(h.size(0), self.out_feats).to(CONFIG.DEVICE)
         sampled_z = self.mean + gaussian_noise * torch.exp(self.log_std).to(CONFIG.DEVICE)
         sampled_z = self.norm_2(sampled_z)
 
@@ -78,9 +67,6 @@ class InferNet(nn.Module):
         return adj_rec
 
     def forward(self, g, ori_features):
-        if self.nodes_embedding is None:
-            self.nodes_embedding = ori_features
-
         z = self.encoder(g, ori_features)
         adj_rec = self.decoder(z)
 
