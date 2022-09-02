@@ -104,14 +104,10 @@ class ScDataset(DGLDataset):
         pass
 
     def process(self):
-        print(self.exp_file)
         features, adj, gene_frame = _sc_parser(
             exp_file=self.exp_file,
             net_file=self.net_file
         )
-
-        transformer = FastICA(n_components=200)
-        features = transformer.fit_transform(features)
 
         train_graph, valid_graph, test_graph = _split(adj, ratio=[0.6, 0.2, 0.2])
         adj = coo_matrix(adj, dtype=int)
@@ -128,6 +124,7 @@ class ScDataset(DGLDataset):
         self.set.append(self.test_graph)
 
     def has_cache(self):
+        print(os.path.exists(os.path.join(self.save_path, '{}.bin'.format(self.name))))
         return os.path.exists(os.path.join(self.save_path, '{}.bin'.format(self.name)))
 
     def save(self):
@@ -140,10 +137,11 @@ class ScDataset(DGLDataset):
         print('file is saved in path:{}'.format(self.save_path))
 
     def load(self):
-        if not os.path.exists(self.save_path):
+        print('loading')
+        path = os.path.join(self.save_path, '{}.bin'.format(self.name))
+        if not os.path.exists(path):
             raise FileNotFoundError('file not found')
 
-        path = os.path.join(self.save_path, '{}.bin'.format(self.name))
         self.set = load_graphs(path)
         self.graph, self.train_graph, self.valid_graph, self.test_graph = self.set
 
