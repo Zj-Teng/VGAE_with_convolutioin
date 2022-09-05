@@ -9,6 +9,7 @@ from scorer import *
 
 
 # TODO: make fp low down(modify function _calc_threshold)
+# TODO: use EarlyStopping
 
 class EarlyStopping:
     def __init__(self, patience=10):
@@ -48,7 +49,7 @@ def _compute_loss_para(adj):
     return weight_tensor, norm
 
 
-def _calc_threshold(x, ratio=99):
+def _calc_threshold(x, ratio=95):
     logits = x.view(-1).detach().cpu().numpy()
     threshold = np.percentile([lgs for lgs in logits], ratio)
     if threshold < 0.:
@@ -63,7 +64,7 @@ def main():
         in_feats=200, out_feats=200, hidden_feats=100, shape=(1120, 200), rand_init=False
     ).to(CONFIG.DEVICE)
     dst = ScDataset(
-        name='mESC', raw_dir='./data/raw/Benchmark Dataset/Lofgof Dataset/mESC/TFs500',
+        name='mESC', raw_dir='./data/raw/Benchmark Dataset/Lofgof Dataset/mESC/TFs1000',
         save_dir='./data/processed', exp_file='ExpressionData.csv', net_file='network.csv'
     )
     optimizer = Adam(model.parameters(), CONFIG.LEARNING_RATE, weight_decay=CONFIG.WEIGHT_DECAY)
@@ -146,14 +147,14 @@ def main():
     )
 
     print('test in complete graph')
-    logits = model(dst.graph, feats)
+    logits = model(dst.graph.to(CONFIG.DEVICE), feats)
     threshold = _calc_threshold(logits)
-    confused_matrix = get_confusion_matrix(logits, test_graph, threshold=threshold)
+    confused_matrix = get_confusion_matrix(logits, ground_truth, threshold=threshold)
 
     print(confused_matrix)
-    accuracy, precision, recall, f_beta = get_metric(logits, test_graph, threshold=threshold, beta=1)
-    au_roc = get_auroc(logits, test_graph)
-    au_pr = get_aupr(logits, test_graph)
+    accuracy, precision, recall, f_beta = get_metric(logits, ground_truth, threshold=threshold, beta=1)
+    au_roc = get_auroc(logits, ground_truth)
+    au_pr = get_aupr(logits, ground_truth)
     print('threshold={}'.format(threshold))
     print(
         '指标:\naccuracy:{:0.6f},precision:{:0.6f},recall:{:0.6f},\nf_beta:{:0.6f},auroc:{:0.6f},aupr:{:0.6f}'.format(
