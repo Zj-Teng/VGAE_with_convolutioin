@@ -8,8 +8,7 @@ from module import InferNet
 from scorer import *
 
 
-# import scipy
-
+# TODO: make fp low down(modify function _calc_threshold)
 
 class EarlyStopping:
     def __init__(self, patience=10):
@@ -49,7 +48,7 @@ def _compute_loss_para(adj):
     return weight_tensor, norm
 
 
-def _calc_threshold(x, ratio=98):
+def _calc_threshold(x, ratio=99):
     logits = x.view(-1).detach().cpu().numpy()
     threshold = np.percentile([lgs for lgs in logits], ratio)
     if threshold < 0.:
@@ -64,30 +63,39 @@ def main():
         in_feats=200, out_feats=200, hidden_feats=100, shape=(1120, 200), rand_init=False
     ).to(CONFIG.DEVICE)
     dst = ScDataset(
-        name='mESC', raw_dir='./data/raw/Benchmark Dataset/Lofgof Dataset/mESC/TFs+500',
-        save_dir='./data/processed', exp_file='BL--ExpressionData.csv', net_file='BL--network.csv'
+        name='mESC', raw_dir='./data/raw/Benchmark Dataset/Lofgof Dataset/mESC/TFs500',
+        save_dir='./data/processed', exp_file='ExpressionData.csv', net_file='network.csv'
     )
     optimizer = Adam(model.parameters(), CONFIG.LEARNING_RATE, weight_decay=CONFIG.WEIGHT_DECAY)
     print('Total Parameters:{}'.format(sum([p.nelement() for p in model.parameters()])))
 
-    # init recorder
-    train_acc, val_roc, val_ap, test_roc, test_ap = [], [], [], [], []
-    logits = None
-    threshold = None
-
     # generate input
-    ground_truth = dst.graph.to(CONFIG.DEVICE)
-    train_graph = dst.train_graph.to(CONFIG.DEVICE)
-    valid_graph = dst.valid_graph.to(CONFIG.DEVICE)
-    test_graph = dst.test_graph.to(CONFIG.DEVICE)
-    feats = ground_truth.ndata.pop('x').to(CONFIG.DEVICE)
+    feats = dst.graph.ndata.pop('x').float().to(CONFIG.DEVICE)
+    ground_truth = dst.graph.adjacency_matrix().to_dense().to(CONFIG.DEVICE)
+    train_graph = dst.train_graph.adjacency_matrix().to_dense().to(CONFIG.DEVICE)
+    valid_graph = dst.valid_graph.adjacency_matrix().to_dense().to(CONFIG.DEVICE)
+    test_graph = dst.test_graph.adjacency_matrix().to_dense().to(CONFIG.DEVICE)
+
+    dst.train_graph = dst.train_graph.to(CONFIG.DEVICE)
+    dst.valid_graph = dst.valid_graph.to(CONFIG.DEVICE)
+    dst.test_graph = dst.test_graph.to(CONFIG.DEVICE)
 
     # compute loss parameters
     weight_tensor, norm = _compute_loss_para(train_graph)
 
+    # init loader
+    # sampler = dgl.dataloading.as_edge_prediction_sampler(
+    #     sampler=dgl.dataloading.MultiLayerFullNeighborSampler(10),
+    #     negative_sampler=dgl.dataloading.negative_sampler.GlobalUniform(5)
+    # )
+    # dataloader = dgl.dataloading.DataLoader(
+    #     dst.train_graph, sampler=sampler, device='cuda', indices=
+    #     batch_size=8, shuffle=True, graph_sampler=sampler
+    # )
+
     for epoch in range(CONFIG.EPOCH):
         model.train()
-        logits = model.forward(train_graph, feats)
+        logits = model.forward(dst.train_graph, feats)
         threshold = _calc_threshold(logits)
 
         # compute loss
@@ -104,45 +112,52 @@ def main():
         loss.backward()
         optimizer.step()
 
-        train_acc.append(get_acc(logits, train_graph, threshold=threshold))
+        train_acc = get_acc(logits, train_graph, threshold=threshold)
 
         model.eval()
-        logits = model(train_graph, feats)
-        val_roc.append(get_auroc(valid_graph, logits))
+        logits = model(dst.train_graph, feats)
+        val_roc = get_auroc(logits, valid_graph)
+        val_aupr = get_aupr(logits, valid_graph)
         iter_nums = epoch + 1
         print(
-            "Epoch:", '%03d' % iter_nums, "train_loss=", "{:.5f}".format(loss.item()), "train_acc=",
-            "{:.5f}".format((sum(train_acc) / iter_nums)), "val_auc=", "{:.5f}".format((sum(val_roc) / iter_nums)),
+            "Epoch:", '%03d' % iter_nums, "train_loss=", "{:.5f}".format(loss.item()),
+            "train_acc=", "{:.5f}".format(train_acc),
+            "val_au_roc=", "{:.5f}".format(val_roc),
+            "val_au_pr=", "{:.5f}".format(val_aupr),
             "threshold={:.5f}".format(threshold)
         )
 
-    # init
+    # test
     model.eval()
-    accuracy, precision, recall, f_beta, tpr, fpr, aupr, mcc, tnr = [], [], [], [], [], [], [], [], []
-    logits = model(train_graph, feats)
-    threshold = _calc_threshold(logits, ratio=95)
+    logits = model(dst.train_graph, feats)
+    threshold = _calc_threshold(logits)
 
     # calculate metric
-    print(logits)
     confused_matrix = get_confusion_matrix(logits, test_graph, threshold=threshold)
     print(confused_matrix)
-    metrix = get_metric(confused_matrix, beta=1)
-    accuracy.append(float(metrix.get('accuracy')))
-    precision.append(float(metrix.get('precision')))
-    recall.append(float(metrix.get('recall')))
-    f_beta.append(float(metrix.get('f_beta')))
-    tpr.append(float(metrix.get('tpr')))
-    fpr.append(float(metrix.get('fpr')))
-    tnr.append(float(metrix.get('tnr')))
-    mcc.append(float(metrix.get('mcc')))
+    accuracy, precision, recall, f_beta = get_metric(logits, test_graph, threshold=threshold, beta=1)
+    au_roc = get_auroc(logits, test_graph)
+    au_pr = get_aupr(logits, test_graph)
     print('threshold={}'.format(threshold))
-
     print(
-        '平均指标:\naccuracy:{},precision:{},recall:{},f_beta:{},\ntpr:{},fpr:{},mcc:{},tnr={}'.format(
-            sum(accuracy) / len(accuracy), sum(precision) / len(precision),
-            sum(recall) / len(recall), sum(f_beta) / len(f_beta),
-            sum(tpr) / len(tpr), sum(fpr) / len(fpr),
-            sum(mcc) / len(mcc), sum(tnr) / len(tnr)
+        '指标:\naccuracy:{:0.6f},precision:{:0.6f},recall:{:0.6f},\nf_beta:{:0.6f},auroc:{:0.6f},aupr:{:0.6f}'.format(
+            accuracy, precision, recall, f_beta, au_roc, au_pr
+        )
+    )
+
+    print('test in complete graph')
+    logits = model(dst.graph, feats)
+    threshold = _calc_threshold(logits)
+    confused_matrix = get_confusion_matrix(logits, test_graph, threshold=threshold)
+
+    print(confused_matrix)
+    accuracy, precision, recall, f_beta = get_metric(logits, test_graph, threshold=threshold, beta=1)
+    au_roc = get_auroc(logits, test_graph)
+    au_pr = get_aupr(logits, test_graph)
+    print('threshold={}'.format(threshold))
+    print(
+        '指标:\naccuracy:{:0.6f},precision:{:0.6f},recall:{:0.6f},\nf_beta:{:0.6f},auroc:{:0.6f},aupr:{:0.6f}'.format(
+            accuracy, precision, recall, f_beta, au_roc, au_pr
         )
     )
 

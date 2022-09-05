@@ -6,6 +6,8 @@ from torch import nn
 from config import CONFIG
 
 
+# TODO: construct a new module based on GAT
+
 class InferNet(nn.Module):
 
     def __init__(
@@ -38,7 +40,6 @@ class InferNet(nn.Module):
 
         self.norm_1 = nn.BatchNorm1d(hidden_feats)
         self.norm_2 = nn.BatchNorm1d(out_feats)
-        self.norm_3 = nn.BatchNorm1d(shape[0])
 
         if rand_init:
             self._init_nodes_rand_embedding(shape)
@@ -61,13 +62,12 @@ class InferNet(nn.Module):
     def decoder(self, z):
 
         adj_rec = _self_conv(z)
-        adj_rec = self.norm_3(adj_rec)
         adj_rec = self.linear(adj_rec)
 
         return adj_rec
 
-    def forward(self, g, ori_features):
-        z = self.encoder(g, ori_features)
+    def forward(self, g, x):
+        z = self.encoder(g, x)
         adj_rec = self.decoder(z)
 
         return adj_rec

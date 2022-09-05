@@ -8,7 +8,6 @@ import torch
 from dgl.data import DGLDataset
 from dgl.data.utils import save_graphs, load_graphs
 from scipy.sparse import coo_matrix
-from sklearn.decomposition import FastICA
 
 
 def _sc_parser(exp_file, net_file):
@@ -47,6 +46,7 @@ def _split(exp, net, ratio=None):
         ratio = [0.6, 0.2, 0.2]
 
     g = nx.from_numpy_array(net, create_using=nx.DiGraph)
+    node_list = g.nodes
     edge_list = nx.to_edgelist(g)
     edge_list = list(edge_list)
     num_edges = len(edge_list)
@@ -62,8 +62,9 @@ def _split(exp, net, ratio=None):
     valid_edges = [edge_list[i] for i in valid_idx]
     test_edges = [edge_list[i] for i in test_idx]
 
-    def generator(exp, edges):
+    def generator(exp, edges, nodes):
         graph = nx.DiGraph()
+        graph.add_nodes_from(nodes)
         graph.add_edges_from(edges)
         graph = dgl.from_networkx(graph)
         exp = exp[list(graph.nodes())]
@@ -71,9 +72,9 @@ def _split(exp, net, ratio=None):
 
         return graph
 
-    train_graph = generator(exp, train_edges)
-    valid_graph = generator(exp, valid_edges)
-    test_graph = generator(exp, test_edges)
+    train_graph = generator(exp, train_edges, node_list)
+    valid_graph = generator(exp, valid_edges, node_list)
+    test_graph = generator(exp, test_edges, node_list)
 
     return train_graph, valid_graph, test_graph
 
@@ -81,8 +82,8 @@ def _split(exp, net, ratio=None):
 class ScDataset(DGLDataset):
 
     def __init__(
-            self, name: str = '', raw_dir: str = None, save_dir: str = None, force_reload: bool = True,
-            verbose: bool = False, exp_file: str = None, net_file: str = None
+            self, name: str = '', raw_dir: str = None, save_dir: str = None, force_reload: bool = False,
+            verbose: bool = True, exp_file: str = None, net_file: str = None
     ):
         self.exp_file = os.path.join(raw_dir, exp_file)
         self.net_file = os.path.join(raw_dir, net_file)
@@ -90,7 +91,7 @@ class ScDataset(DGLDataset):
         self.train_graph = None
         self.valid_graph = None
         self.test_graph = None
-        self.set = []
+        self.all_graph = list()
 
         super(ScDataset, self).__init__(
             name=name, raw_dir=raw_dir, save_dir=save_dir, force_reload=force_reload, verbose=verbose
@@ -102,30 +103,25 @@ class ScDataset(DGLDataset):
     def __getitem__(self, idx):
         return self.graph
 
-    def __str__(self):
-        pass
-
     def process(self):
         features, adj, gene_frame = _sc_parser(
             exp_file=self.exp_file,
             net_file=self.net_file
         )
 
-        print('Doing ICA for dimensionality reduction')
-        transformer = FastICA(n_components=200)
-        features = transformer.fit_transform(features)
         self.train_graph, self.valid_graph, self.test_graph = _split(features, adj, ratio=[0.6, 0.2, 0.2])
 
         adj = coo_matrix(adj, dtype=int)
         self.graph = dgl.from_scipy(adj)
         self.graph.ndata['x'] = torch.from_numpy(features)
 
-        self.set.append(self.graph)
-        self.set.append(self.train_graph)
-        self.set.append(self.valid_graph)
-        self.set.append(self.test_graph)
+        self.all_graph.append(self.graph)
+        self.all_graph.append(self.train_graph)
+        self.all_graph.append(self.valid_graph)
+        self.all_graph.append(self.test_graph)
 
     def has_cache(self):
+        print(os.path.join(self.save_path, '{}.bin'.format(self.name)))
         return os.path.exists(os.path.join(self.save_path, '{}.bin'.format(self.name)))
 
     def save(self):
@@ -133,31 +129,21 @@ class ScDataset(DGLDataset):
             os.makedirs(self.save_path)
 
         path = os.path.join(self.save_path, '{}.bin'.format(self.name))
-        save_graphs(path, self.set)
-
-        print('file is saved in path:{}'.format(self.save_path))
+        save_graphs(path, self.all_graph)
 
     def load(self):
-        print('loading')
         path = os.path.join(self.save_path, '{}.bin'.format(self.name))
         if not os.path.exists(path):
             raise FileNotFoundError('file not found')
 
-        self.set = load_graphs(path)
-        self.graph, self.train_graph, self.valid_graph, self.test_graph = self.set
-
-        print('file is loaded')
+        self.all_graph = load_graphs(path)
+        self.graph, self.train_graph, self.valid_graph, self.test_graph = self.all_graph[0]
 
 
-# if __name__ == '__main__':
-#     features, adj, gene_frame = _sc_parser(
-#         exp_file='./data/raw/Benchmark Dataset/Lofgof Dataset/mESC/TFs+500/BL--ExpressionData.csv',
-#         net_file='./data/raw/Benchmark Dataset/Lofgof Dataset/mESC/TFs+500/BL--network.csv'
-#     )
-#     _split(features, adj)
-    # dst = ScDataset(
-    #     name='mESC', raw_dir='./data/raw/Benchmark Dataset/Lofgof Dataset/mESC/TFs+500',
-    #     save_dir='./data/processed', exp_file='BL--ExpressionData.csv', net_file='BL--network.csv'
-    # )
+if __name__ == '__main__':
+    dst = ScDataset(
+        name='mESC', raw_dir='./data/raw/Benchmark Dataset/Lofgof Dataset/mESC/TFs500',
+        save_dir='./data/processed', exp_file='ExpressionData.csv', net_file='network.csv'
+    )
 
 

@@ -11,10 +11,10 @@ class _MetaConst:
 
 
 class _Config(_MetaConst):
-    DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    BATCH_SIZE = 4
-    EPOCH = 200
-    LEARNING_RATE = 0.01
+    DEVICE = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
+    BATCH_SIZE = 8
+    EPOCH = 1000
+    LEARNING_RATE = 0.001
     WEIGHT_DECAY = 5e-4
 
     def __init__(self):
