@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as func
 
-from dgl.nn.pytorch.conv import SAGEConv, GATv2Conv
+from dgl.nn.pytorch.conv import SAGEConv, GATv2Conv, GraphConv
 from torch import nn
 from config import CONFIG
 
@@ -11,7 +11,7 @@ from config import CONFIG
 class InferNet(nn.Module):
 
     def __init__(
-            self, in_feats: int = -1, out_feats: int = -1, hidden_feats: int = -1, shape: tuple = (), rand_init=True
+            self, in_feats: int = -1, out_feats: int = -1, hidden_feats: int = -1, shape: tuple = ()
     ):
         super(InferNet, self).__init__()
         self.in_feats = in_feats
@@ -19,12 +19,11 @@ class InferNet(nn.Module):
         self.hidden_feats = hidden_feats
         self.mean = None
         self.log_std = None
-        self.nodes_embedding = None
 
         self.base_encoder = nn.Sequential(
-            SAGEConv(in_feats=in_feats, out_feats=hidden_feats, activation=func.relu, aggregator_type='lstm'),
-            SAGEConv(in_feats=hidden_feats, out_feats=hidden_feats, activation=func.relu, aggregator_type='lstm'),
-            SAGEConv(in_feats=hidden_feats, out_feats=hidden_feats, activation=func.relu, aggregator_type='lstm')
+            SAGEConv(in_feats=in_feats, out_feats=hidden_feats, activation=func.relu, aggregator_type='mean'),
+            SAGEConv(in_feats=hidden_feats, out_feats=hidden_feats, activation=func.relu, aggregator_type='mean'),
+            SAGEConv(in_feats=hidden_feats, out_feats=hidden_feats, activation=func.relu, aggregator_type='mean')
         )
 
         self.sage_mu = SAGEConv(
@@ -41,11 +40,7 @@ class InferNet(nn.Module):
         self.norm_1 = nn.BatchNorm1d(hidden_feats)
         self.norm_2 = nn.BatchNorm1d(out_feats)
 
-        if rand_init:
-            self._init_nodes_rand_embedding(shape)
-
     def encoder(self, graph, feats):
-
         h = self.base_encoder[0](graph, feats)
         h = self.base_encoder[1](graph, h)
         h = self.base_encoder[2](graph, h)
@@ -61,7 +56,7 @@ class InferNet(nn.Module):
 
     def decoder(self, z):
 
-        adj_rec = _self_conv(z)
+        adj_rec = _self_conv(z, z)
         adj_rec = self.linear(adj_rec)
 
         return adj_rec
@@ -71,10 +66,6 @@ class InferNet(nn.Module):
         adj_rec = self.decoder(z)
 
         return adj_rec
-
-    @property
-    def nodes_embeddings(self):
-        return self.nodes_embedding
 
 
 class DenseNet(nn.Module):
@@ -137,7 +128,7 @@ class GATAutoEncoder(nn.Module):
 
         self.base_encoder = nn.Sequential(
             GATv2Conv(in_feats=in_feats, out_feats=out_feats, num_heads=num_head, feat_drop=0.2, attn_drop=0.2),
-            GATv2Conv(in_feats=in_feats * num_head, out_feats=out_feats, num_heads=num_head, feat_drop=0.2, attn_drop=0.2),
+            GATv2Conv(in_feats=in_feats, out_feats=out_feats, num_heads=num_head, feat_drop=0.2, attn_drop=0.2),
             GATv2Conv(in_feats=in_feats, out_feats=out_feats, num_heads=num_head, feat_drop=0.2, attn_drop=0.2)
         )
         self.mu = SAGEConv(
@@ -147,8 +138,10 @@ class GATAutoEncoder(nn.Module):
             in_feats=hidden_feats, out_feats=out_feats, activation=lambda x: x, aggregator_type='mean'
         )
 
-    def encoder(self):
-        pass
+    def encoder(self, x, adj):
+        h = self.base_encoder[0](adj, x)
+        h = torch.mean(h, dim=0)
+        print(h.shape)
 
     def decoder(self):
         pass
@@ -157,10 +150,9 @@ class GATAutoEncoder(nn.Module):
         pass
 
 
-def _self_conv(x):
-
-    signal = torch.fft.fft2(input=x, norm='ortho')
-    moment = torch.fft.fft2(input=x, norm='ortho')
+def _self_conv(signal, moment):
+    signal = torch.fft.fft2(input=signal, norm='ortho')
+    moment = torch.fft.fft2(input=moment, norm='ortho')
     adj_rec = torch.matmul(moment, signal.t())
     adj_rec = torch.fft.ifft2(input=adj_rec, norm='ortho').to(torch.float32)
 

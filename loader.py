@@ -145,5 +145,3 @@ if __name__ == '__main__':
         name='mESC', raw_dir='./data/raw/Benchmark Dataset/Lofgof Dataset/mESC/TFs500',
         save_dir='./data/processed', exp_file='ExpressionData.csv', net_file='network.csv'
     )
-
-
