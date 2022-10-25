@@ -11,7 +11,7 @@ from config import CONFIG
 class InferNet(nn.Module):
 
     def __init__(
-            self, in_feats: int = -1, out_feats: int = -1, hidden_feats: int = -1, shape: tuple = ()
+            self, in_feats: int = -1, out_feats: int = -1, hidden_feats: int = -1, n_gene: int = 0
     ):
         super(InferNet, self).__init__()
         self.in_feats = in_feats
@@ -34,7 +34,7 @@ class InferNet(nn.Module):
         )
 
         self.linear = DenseNet(
-            in_feats=shape[0], hidden_feats=shape[0], out_feats=shape[0], num_layers=4, dropout=0.2
+            in_feats=n_gene, hidden_feats=n_gene, out_feats=n_gene, num_layers=4, dropout=0.2
         )
 
         self.norm_1 = nn.BatchNorm1d(hidden_feats)

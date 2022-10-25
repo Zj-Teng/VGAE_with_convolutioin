@@ -43,7 +43,7 @@ def _dr_network_parser(file):
 
 def _split(exp, net, ratio=None):
     if ratio is None:
-        ratio = [0.6, 0.2, 0.2]
+        ratio = [0.6, 0.4]
 
     g = nx.from_numpy_array(net, create_using=nx.DiGraph)
     node_list = g.nodes
@@ -51,15 +51,13 @@ def _split(exp, net, ratio=None):
     edge_list = list(edge_list)
     num_edges = len(edge_list)
 
-    num_train, num_test, num_valid = [int(num_edges * r) for r in ratio]
+    num_train, num_test = [int(num_edges * r) for r in ratio]
     idx = np.array([i for i in range(num_edges)], dtype=int)
     np.random.shuffle(idx)
     train_idx = idx[: num_train]
-    valid_idx = idx[num_train: (num_train + num_valid)]
-    test_idx = idx[(num_train + num_valid):]
+    test_idx = idx[num_train: ]
 
     train_edges = [edge_list[i] for i in train_idx]
-    valid_edges = [edge_list[i] for i in valid_idx]
     test_edges = [edge_list[i] for i in test_idx]
 
     def generator(exp, edges, nodes):
@@ -73,17 +71,16 @@ def _split(exp, net, ratio=None):
         return graph
 
     train_graph = generator(exp, train_edges, node_list)
-    valid_graph = generator(exp, valid_edges, node_list)
     test_graph = generator(exp, test_edges, node_list)
 
-    return train_graph, valid_graph, test_graph
+    return train_graph, test_graph
 
 
 class ScDataset(DGLDataset):
 
     def __init__(
             self, name: str = '', raw_dir: str = None, save_dir: str = None, force_reload: bool = False,
-            verbose: bool = True, exp_file: str = None, net_file: str = None
+            verbose: bool = True, exp_file: str = None, net_file: str = None, split_ratio: list = None
     ):
         self.exp_file = os.path.join(raw_dir, exp_file)
         self.net_file = os.path.join(raw_dir, net_file)
@@ -92,6 +89,8 @@ class ScDataset(DGLDataset):
         self.valid_graph = None
         self.test_graph = None
         self.all_graph = list()
+        self.shape = None
+        self.split_ratio = split_ratio
 
         super(ScDataset, self).__init__(
             name=name, raw_dir=raw_dir, save_dir=save_dir, force_reload=force_reload, verbose=verbose
@@ -109,15 +108,15 @@ class ScDataset(DGLDataset):
             net_file=self.net_file
         )
 
-        self.train_graph, self.valid_graph, self.test_graph = _split(features, adj, ratio=[0.6, 0.2, 0.2])
+        self.train_graph, self.test_graph = _split(features, adj, ratio=self.split_ratio)
 
         adj = coo_matrix(adj, dtype=int)
         self.graph = dgl.from_scipy(adj)
         self.graph.ndata['x'] = torch.from_numpy(features)
+        self.shape = features.shape
 
         self.all_graph.append(self.graph)
         self.all_graph.append(self.train_graph)
-        self.all_graph.append(self.valid_graph)
         self.all_graph.append(self.test_graph)
 
     def has_cache(self):
@@ -142,6 +141,6 @@ class ScDataset(DGLDataset):
 
 if __name__ == '__main__':
     dst = ScDataset(
-        name='mESC', raw_dir='./data/raw/Benchmark Dataset/Lofgof Dataset/mESC/TFs500',
+        name='test', raw_dir='./data/raw/Benchmark Dataset/Lofgof Dataset/mESC/TFs500',
         save_dir='./data/processed', exp_file='ExpressionData.csv', net_file='network.csv'
     )

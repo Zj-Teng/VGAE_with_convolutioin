@@ -8,7 +8,8 @@ from module import *
 from scorer import *
 
 
-# TODO: make fp low down(modify function _calc_threshold)
+os.environ["CUDA_VISIBLE_DEVICES"] = '1'
+
 
 class EarlyStopping:
     def __init__(self, patience=10, save_path=None):
@@ -51,55 +52,20 @@ def _compute_loss_para(adj):
     return weight_tensor, norm
 
 
-def _calc_threshold(x, ratio=95):
-    logits = x.view(-1).detach().cpu().numpy()
-    threshold = np.percentile([lgs for lgs in logits], ratio)
-    if threshold < 0.:
-        threshold = 0.
-
-    return 0.
-
-
-def main():
-    # init component
-    raw_dir = 'data/raw/Benchmark Dataset/STRING Dataset/mHSC-L/TFs1000'
-    save_dir = './data/processed'
-    file_name = 'STRING-mHSC-L1000'
-    model_checkpoint = os.path.join(save_dir, file_name, 'model.pt')
+def train(model, dst, stopper):
     beta = 0.5
-    shape = (692, 200)
-
-    model = InferNet(
-        in_feats=200, out_feats=200, hidden_feats=200, shape=shape
-    ).to(CONFIG.DEVICE)
-    dst = ScDataset(
-        name=file_name, raw_dir=raw_dir, save_dir=save_dir,
-        exp_file='ExpressionData.csv', net_file='network.csv'
-    )
-    optimizer = Adam(model.parameters(), CONFIG.LEARNING_RATE, weight_decay=CONFIG.WEIGHT_DECAY)
-    print('Total Parameters:{}'.format(sum([p.nelement() for p in model.parameters()])))
-    stopper = EarlyStopping(patience=50, save_path=model_checkpoint)
-
-    # generate input
     feats = dst.graph.ndata.pop('x').float().to(CONFIG.DEVICE)
-    ground_truth = dst.graph.adjacency_matrix().to_dense().to(CONFIG.DEVICE)
+    optimizer = Adam(model.parameters(), CONFIG.LEARNING_RATE, weight_decay=CONFIG.WEIGHT_DECAY)
+
     train_graph = dst.train_graph.adjacency_matrix().to_dense().to(CONFIG.DEVICE)
-    valid_graph = dst.valid_graph.adjacency_matrix().to_dense().to(CONFIG.DEVICE)
-    test_graph = dst.test_graph.adjacency_matrix().to_dense().to(CONFIG.DEVICE)
-
-    dst.train_graph = dst.train_graph.to(CONFIG.DEVICE)
-    dst.valid_graph = dst.valid_graph.to(CONFIG.DEVICE)
-    dst.test_graph = dst.test_graph.to(CONFIG.DEVICE)
-
-    # compute loss parameters
     weight_tensor, norm = _compute_loss_para(train_graph)
 
-    for epoch in range(CONFIG.EPOCH):
-        model.train()
-        logits = model.forward(dst.train_graph, feats)
-        threshold = _calc_threshold(logits)
+    model.train()
+    print('Total Parameters:{}'.format(sum([p.nelement() for p in model.parameters()])))
 
-        # compute loss
+    for epoch in range(CONFIG.EPOCH):
+        logits = model.forward(dst.train_graph, feats)
+
         loss = norm * func.binary_cross_entropy_with_logits(
             logits.view(-1), train_graph.view(-1), weight=weight_tensor
         )
@@ -108,112 +74,199 @@ def main():
         ).sum(1).mean()
         loss -= beta * kl_divergence
 
-        # backward
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-        train_acc = get_acc(logits, train_graph, threshold=threshold)
-
-        model.eval()
-        logits = model(dst.train_graph, feats)
-        val_roc = get_auroc(logits, valid_graph)
-        val_aupr = get_aupr(logits, valid_graph)
-        if stopper.step(val_roc, model):
+        acc = get_acc(logits, train_graph, threshold=0.)
+        auroc = get_auroc(logits, train_graph)
+        auprc = get_aupr(logits, train_graph)
+        if stopper.step(auroc, model):
             break
 
         iter_nums = epoch + 1
         print(
-            "Epoch:", '%03d' % iter_nums, "train_loss=", "{:.5f}".format(loss.item()),
-            "train_acc=", "{:.5f}".format(train_acc), "val_au_roc=", "{:.5f}".format(val_roc),
-            "val_au_pr=", "{:.5f}".format(val_aupr), "threshold={:.5f}".format(threshold)
+            "Epoch:", '%03d' % iter_nums, "loss=", "{:.5f}".format(loss.item()),
+            "acc=", "{:.5f}".format(acc), "auroc=", "{:.5f}".format(auroc),
+            "auprc=", "{:.5f}".format(auprc)
         )
 
-    # test
-    model = InferNet(
-        in_feats=200, out_feats=200, hidden_feats=200, shape=shape
-    ).to(CONFIG.DEVICE)
-    model.load_state_dict(torch.load(model_checkpoint))
-    model.eval()
 
-    logits = model(dst.train_graph.to(CONFIG.DEVICE), feats)
-    threshold = 0.0
+def test(model, dst):
+    pass
 
-    # calculate metric
-    confused_matrix = get_confusion_matrix(logits, test_graph, threshold=threshold)
-    print(confused_matrix)
-    accuracy, precision, recall, f_beta = get_metric(logits, test_graph, threshold=threshold, beta=1)
-    au_roc = get_auroc(logits, test_graph)
-    au_pr = get_aupr(logits, test_graph)
-    with open(os.path.join(save_dir, file_name, 'metric.txt'), mode='w', encoding='UTF-8') as f:
-        print('threshold={}'.format(threshold), file=f)
-        print(
-            '指标:\naccuracy:{:0.6f},precision:{:0.6f},recall:{:0.6f},\n'
-            'f_beta:{:0.6f},auroc:{:0.6f},aupr:{:0.6f}'.format(
-                accuracy, precision, recall, f_beta, au_roc, au_pr
-            ), end='\n\n', file=f
+
+def main():
+    datsets = ['Non-Specific Dataset', 'Specific Dataset', 'STRING Dataset']
+    cell_type = ['hESC', 'hHEP', 'mDC', 'mESC', 'mHSC-E', 'mHSC-GM', 'mHSC-L']
+    n_tf = ['TFs500', 'TFs1000']
+    dataset_names = ['Non-Specific', 'Specific', 'STRING']
+    tf = ['500', '1000']
+    exp_file = 'ExpressionData.csv'
+    net_file = 'network.csv'
+    root_dir = 'data/raw/Benchmark Dataset'
+    save_dir = './data/processed'
+    turn = 50
+
+    raw_dirs = [os.path.join(root_dir, d, c, t) for d in datsets for c in cell_type for t in n_tf]
+    file_names = ['{}-{}{}'.format(d, c, t) for d in dataset_names for c in cell_type for t in tf]
+
+    for raw_dir, file_name in zip(raw_dirs, file_names):
+        dst = ScDataset(
+            name=file_name, raw_dir=raw_dir, save_dir=save_dir, exp_file=exp_file, net_file=net_file
         )
+        n_gene, feats = dst.shape
+        model = InferNet(
+            in_feats=feats, out_feats=feats, hidden_feats=feats, n_gene=n_gene
+        ).to(CONFIG.DEVICE)
+        model_checkpoint = os.path.join(save_dir, file_name, 'model.pt')
+        stopper = EarlyStopping(patience=50, save_path=model_checkpoint)
 
-    print('test in complete graph')
-    logits = model(dst.train_graph.to(CONFIG.DEVICE), feats)
-    threshold = _calc_threshold(logits)
-    confused_matrix = get_confusion_matrix(logits, ground_truth, threshold=threshold)
+        train(model, dst, stopper)
 
-    print(confused_matrix)
-    accuracy, precision, recall, f_beta = get_metric(logits, ground_truth, threshold=threshold, beta=1)
-    au_roc = get_auroc(logits, ground_truth)
-    au_pr = get_aupr(logits, ground_truth)
-    with open(os.path.join(save_dir, file_name, 'metric.txt'), mode='a', encoding='UTF-8') as f:
-        print('threshold={}'.format(threshold), file=f)
-        print(
-            '指标:\naccuracy:{:0.6f},precision:{:0.6f},recall:{:0.6f},\n'
-            'f_beta:{:0.6f},auroc:{:0.6f},aupr:{:0.6f}'.format(
-                accuracy, precision, recall, f_beta, au_roc, au_pr
-            ), end='\n\n', file=f
-        )
+        # generate input
+        feats = dst.graph.ndata.pop('x').float().to(CONFIG.DEVICE)
+        ground_truth = dst.graph.adjacency_matrix().to_dense().to(CONFIG.DEVICE)
+        train_graph = dst.train_graph.adjacency_matrix().to_dense().to(CONFIG.DEVICE)
+        valid_graph = dst.valid_graph.adjacency_matrix().to_dense().to(CONFIG.DEVICE)
+        test_graph = dst.test_graph.adjacency_matrix().to_dense().to(CONFIG.DEVICE)
 
-    print('test in balanced dataset')
-    accuracy, precision, recall, f_beta, au_roc, au_pr = [], [], [], [], [], []
-    for _ in range(100):
+        dst.train_graph = dst.train_graph.to(CONFIG.DEVICE)
+        dst.valid_graph = dst.valid_graph.to(CONFIG.DEVICE)
+        dst.test_graph = dst.test_graph.to(CONFIG.DEVICE)
+
+        # test
+        model = InferNet(
+            in_feats=200, out_feats=200, hidden_feats=200, n_gene=n_gene
+        ).to(CONFIG.DEVICE)
+        model.load_state_dict(torch.load(model_checkpoint))
+        model.eval()
+        threshold = 0.0
+
+        print('test in test graph')
+        accuracy, precision, recall, f_beta, au_roc, au_pr, mcc = [], [], [], [], [], [], []
+        for _ in range(turn):
+            logits = model(dst.train_graph.to(CONFIG.DEVICE), feats)
+
+            # calculate metric
+            confused_matrix = get_confusion_matrix(logits, test_graph, threshold=threshold)
+            print(confused_matrix)
+            t_accuracy, t_precision, t_recall, t_f_beta = get_metric(
+                logits, test_graph, threshold=threshold, beta=1
+            )
+            t_au_roc = get_auroc(logits, test_graph)
+            t_au_pr = get_aupr(logits, test_graph)
+            t_mcc = get_mcc(logits, test_graph)
+
+            accuracy.append(t_accuracy)
+            precision.append(t_precision)
+            recall.append(t_recall)
+            f_beta.append(t_f_beta)
+            au_roc.append(t_au_roc)
+            au_pr.append(t_au_pr)
+            mcc.append(t_mcc)
+
+        with open(os.path.join(save_dir, file_name, 'metric.txt'), mode='w', encoding='UTF-8') as f:
+            np.set_printoptions(precision=3)
+            print('test in test graph, threshold={}'.format(threshold), file=f)
+            print(
+                '指标:\naccuracy:{:0.6f}(+-{:0.6f}),precision:{:0.6f}(+-{:0.6f}),recall:{:0.6f}(+-{:0.6f}),\n'
+                'f_beta:{:0.6f}(+-{:0.6f}),auroc:{:0.6f}(+-{:0.6f}),aupr:{:0.6f}(+-{:0.6f}),mcc:{:0.6f}(+-{:0.6f})'.format(
+                    np.mean(accuracy), np.std(accuracy, ddof=1), np.mean(precision), np.std(precision, ddof=1),
+                    np.mean(recall), np.std(recall, ddof=1), np.mean(f_beta), np.std(f_beta, ddof=1),
+                    np.mean(au_roc), np.std(au_roc, ddof=1), np.mean(au_pr), np.std(au_pr, ddof=1),
+                    np.mean(mcc), np.std(mcc, ddof=1)
+                ), end='\n\n', file=f
+            )
+
+        print('test in complete graph')
+        accuracy, precision, recall, f_beta, au_roc, au_pr, mcc = [], [], [], [], [], [], []
+        for _ in range(turn):
+            logits = model(dst.train_graph.to(CONFIG.DEVICE), feats)
+            threshold = _calc_threshold(logits)
+            confused_matrix = get_confusion_matrix(logits, ground_truth, threshold=threshold)
+
+            print(confused_matrix)
+            t_accuracy, t_precision, t_recall, t_f_beta = get_metric(
+                logits, ground_truth, threshold=threshold, beta=1
+            )
+            t_au_roc = get_auroc(logits, ground_truth)
+            t_au_pr = get_aupr(logits, ground_truth)
+            t_mcc = get_mcc(logits, ground_truth)
+
+            accuracy.append(t_accuracy)
+            precision.append(t_precision)
+            recall.append(t_recall)
+            f_beta.append(t_f_beta)
+            au_roc.append(t_au_roc)
+            au_pr.append(t_au_pr)
+            mcc.append(t_mcc)
+
+        with open(os.path.join(save_dir, file_name, 'metric.txt'), mode='a', encoding='UTF-8') as f:
+            np.set_printoptions(precision=3)
+            print('test in complete graph, threshold={}'.format(threshold), file=f)
+            print(
+                '指标:\naccuracy:{:0.6f}(+-{:0.6f}),precision:{:0.6f}(+-{:0.6f}),recall:{:0.6f}(+-{:0.6f}),\n'
+                'f_beta:{:0.6f}(+-{:0.6f}),auroc:{:0.6f}(+-{:0.6f}),aupr:{:0.6f}(+-{:0.6f}),mcc:{:0.6f}(+-{:0.6f})'.format(
+                    np.mean(accuracy), np.std(accuracy, ddof=1), np.mean(precision), np.std(precision, ddof=1),
+                    np.mean(recall), np.std(recall, ddof=1), np.mean(f_beta), np.std(f_beta, ddof=1),
+                    np.mean(au_roc), np.std(au_roc, ddof=1), np.mean(au_pr), np.std(au_pr, ddof=1),
+                    np.mean(mcc), np.std(mcc, ddof=1)
+                ), end='\n\n', file=f
+            )
+
         test_edge_true_index = torch.nonzero(test_graph.view(-1) == 1).detach().cpu().numpy()
         all_edge_false_index = torch.nonzero(ground_truth.view(-1) == 0).detach().cpu().numpy()
-        numpy.random.shuffle(all_edge_false_index)
-        test_edges_index = numpy.append(test_edge_true_index, all_edge_false_index[: test_edge_true_index.shape[0]])
-        test_edges_index = numpy.reshape(test_edges_index, -1)
-        balanced_test_graph = torch.take(ground_truth, torch.from_numpy(test_edges_index).to(CONFIG.DEVICE))
+        all_edge_true_index = torch.nonzero(ground_truth.view(-1) == 1).detach().cpu().numpy()
+        net_density = all_edge_true_index.shape[0] / (all_edge_true_index.shape[0] + all_edge_false_index.shape[0])
+        ratio = [1, 4, 9, 19]
 
-        logits = model(dst.train_graph.to(CONFIG.DEVICE), feats)
-        balanced_logits = torch.take(logits, torch.from_numpy(test_edges_index).to(CONFIG.DEVICE))
-        confused_matrix = get_confusion_matrix(balanced_logits, balanced_test_graph, threshold=threshold)
-        print(confused_matrix)
-        t_accuracy, t_precision, t_recall, t_f_beta = get_metric(
-            balanced_logits, balanced_test_graph, threshold=threshold, beta=1
-        )
-        t_au_roc = get_auroc(balanced_logits, balanced_test_graph)
-        t_au_pr = get_aupr(balanced_logits, balanced_test_graph)
+        for r in ratio:
+            accuracy, precision, recall, f_beta, au_roc, au_pr, mcc = [], [], [], [], [], [], []
 
-        accuracy.append(t_accuracy)
-        precision.append(t_precision)
-        recall.append(t_recall)
-        f_beta.append(t_f_beta)
-        au_roc.append(t_au_roc)
-        au_pr.append(t_au_pr)
+            print('test in balanced graph, ratio={}'.format(r))
+            for _ in range(turn):
+                numpy.random.shuffle(all_edge_false_index)
+                test_edges_index = numpy.append(
+                    test_edge_true_index, all_edge_false_index[: int(r * test_edge_true_index.shape[0])]
+                )
+                test_edges_index = numpy.reshape(test_edges_index, -1)
+                balanced_test_graph = torch.take(ground_truth, torch.from_numpy(test_edges_index).to(CONFIG.DEVICE))
 
-    accuracy = sum(accuracy) / len(accuracy)
-    precision = sum(precision) / len(precision)
-    recall = sum(recall) / len(recall)
-    f_beta = sum(f_beta) / len(f_beta)
-    au_roc = sum(au_roc) / len(au_roc)
-    au_pr = sum(au_pr) / len(au_pr)
+                logits = model(dst.train_graph.to(CONFIG.DEVICE), feats)
+                balanced_logits = torch.take(logits, torch.from_numpy(test_edges_index).to(CONFIG.DEVICE))
+                confused_matrix = get_confusion_matrix(balanced_logits, balanced_test_graph, threshold=threshold)
+                print(confused_matrix)
+                t_accuracy, t_precision, t_recall, t_f_beta = get_metric(
+                    balanced_logits, balanced_test_graph, threshold=threshold, beta=1
+                )
+                t_au_roc = get_auroc(balanced_logits, balanced_test_graph)
+                t_au_pr = get_aupr(balanced_logits, balanced_test_graph)
+                t_mcc = get_mcc(balanced_logits, balanced_test_graph, threshold=threshold)
 
-    with open(os.path.join(save_dir, file_name, 'metric.txt'), mode='a', encoding='UTF-8') as f:
-        print('average metric in 100 turn', file=f)
-        print(
-            '指标:\naccuracy:{:0.6f},precision:{:0.6f},recall:{:0.6f},\n'
-            'f_beta:{:0.6f},auroc:{:0.6f},aupr:{:0.6f}'.format(
-                accuracy, precision, recall, f_beta, au_roc, au_pr
-            ), end='\n\n', file=f
-        )
+                accuracy.append(t_accuracy)
+                precision.append(t_precision)
+                recall.append(t_recall)
+                f_beta.append(t_f_beta)
+                au_roc.append(t_au_roc)
+                au_pr.append(t_au_pr)
+                mcc.append(t_mcc)
+
+            with open(os.path.join(save_dir, file_name, 'metric.txt'), mode='a', encoding='UTF-8') as f:
+                print(
+                    'test in balanced dataset(density:{},threshold={}, ratio:{})'.format(net_density, threshold, r),
+                    file=f
+                )
+                print(
+                    '指标:\naccuracy:{:0.6f}(+-{:0.6f}),precision:{:0.6f}(+-{:0.6f}),recall:{:0.6f}(+-{:0.6f}),\n'
+                    'f_beta:{:0.6f}(+-{:0.6f}),auroc:{:0.6f}(+-{:0.6f}),aupr:{:0.6f}(+-{:0.6f}),mcc:{:0.6f}(+-{:0.6f})'
+                        .format(
+                        np.mean(accuracy), np.std(accuracy, ddof=1), np.mean(precision), np.std(precision, ddof=1),
+                        np.mean(recall), np.std(recall, ddof=1), np.mean(f_beta), np.std(f_beta, ddof=1),
+                        np.mean(au_roc), np.std(au_roc, ddof=1), np.mean(au_pr), np.std(au_pr, ddof=1),
+                        np.mean(mcc), np.std(mcc, ddof=1)
+                    ), end='\n\n', file=f
+                )
 
 
 if __name__ == '__main__':
