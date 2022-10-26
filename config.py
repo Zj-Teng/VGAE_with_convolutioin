@@ -11,7 +11,7 @@ class _MetaConst:
 
 
 class _Config(_MetaConst):
-    DEVICE = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
+    DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     BATCH_SIZE = 8
     EPOCH = 400
     LEARNING_RATE = 0.0005

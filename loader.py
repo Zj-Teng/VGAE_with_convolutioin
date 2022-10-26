@@ -41,10 +41,7 @@ def _dr_network_parser(file):
     pass
 
 
-def _split(exp, net, ratio=None):
-    if ratio is None:
-        ratio = [0.6, 0.4]
-
+def _split(exp, net, ratio):
     g = nx.from_numpy_array(net, create_using=nx.DiGraph)
     node_list = g.nodes
     edge_list = nx.to_edgelist(g)
@@ -55,7 +52,7 @@ def _split(exp, net, ratio=None):
     idx = np.array([i for i in range(num_edges)], dtype=int)
     np.random.shuffle(idx)
     train_idx = idx[: num_train]
-    test_idx = idx[num_train: ]
+    test_idx = idx[num_train:]
 
     train_edges = [edge_list[i] for i in train_idx]
     test_edges = [edge_list[i] for i in test_idx]
@@ -86,7 +83,6 @@ class ScDataset(DGLDataset):
         self.net_file = os.path.join(raw_dir, net_file)
         self.graph = None
         self.train_graph = None
-        self.valid_graph = None
         self.test_graph = None
         self.all_graph = list()
         self.shape = None
@@ -120,27 +116,48 @@ class ScDataset(DGLDataset):
         self.all_graph.append(self.test_graph)
 
     def has_cache(self):
-        print(os.path.join(self.save_path, '{}.bin'.format(self.name)))
-        return os.path.exists(os.path.join(self.save_path, '{}.bin'.format(self.name)))
+        print(
+            os.path.join(
+                self.save_path,
+                '{}-{}{}.bin'.format(self.name, int(self.split_ratio[0] * 10), int(self.split_ratio[1]* 10))
+            )
+        )
+        return os.path.exists(
+            os.path.join(
+                self.save_path,
+                '{}-{}{}.bin'.format(self.name, int(self.split_ratio[0] * 10), int(self.split_ratio[1] * 10))
+            )
+        )
 
     def save(self):
         if not os.path.exists(self.save_path):
             os.makedirs(self.save_path)
 
-        path = os.path.join(self.save_path, '{}.bin'.format(self.name))
+        path = os.path.join(
+            self.save_path, '{}-{}{}.bin'.format(self.name, int(self.split_ratio[0] * 10), int(self.split_ratio[1] * 10))
+        )
+        print(path)
         save_graphs(path, self.all_graph)
 
     def load(self):
-        path = os.path.join(self.save_path, '{}.bin'.format(self.name))
+        path = os.path.join(
+            self.save_path, '{}-{}{}.bin'.format(self.name, int(self.split_ratio[0] * 10), int(self.split_ratio[1] * 10))
+        )
         if not os.path.exists(path):
             raise FileNotFoundError('file not found')
 
         self.all_graph = load_graphs(path)
-        self.graph, self.train_graph, self.valid_graph, self.test_graph = self.all_graph[0]
+        self.graph, self.train_graph, self.test_graph = self.all_graph[0]
+        n_gene = self.graph.ndata['x'].shape[0]
+        n_feats = self.graph.ndata['x'].shape[1]
+
+        self.shape = (n_gene, n_feats)
 
 
 if __name__ == '__main__':
     dst = ScDataset(
         name='test', raw_dir='./data/raw/Benchmark Dataset/Lofgof Dataset/mESC/TFs500',
-        save_dir='./data/processed', exp_file='ExpressionData.csv', net_file='network.csv'
+        save_dir='./data/processed', exp_file='ExpressionData.csv', net_file='network.csv',
+        split_ratio=[0.5, 0.5]
     )
+    print(dst.shape)
