@@ -1,6 +1,7 @@
 import numpy as np
 
 from sklearn.metrics import *
+from numba import jit
 
 
 def _sigmoid(x):

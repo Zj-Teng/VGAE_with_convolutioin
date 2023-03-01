@@ -134,14 +134,17 @@ class ScDataset(DGLDataset):
             os.makedirs(self.save_path)
 
         path = os.path.join(
-            self.save_path, '{}-{}{}.bin'.format(self.name, int(self.split_ratio[0] * 10), int(self.split_ratio[1] * 10))
+            self.save_path, '{}-{}{}.bin'.format(
+                self.name, int(self.split_ratio[0] * 10), int(self.split_ratio[1] * 10)
+            )
         )
-        print(path)
         save_graphs(path, self.all_graph)
 
     def load(self):
         path = os.path.join(
-            self.save_path, '{}-{}{}.bin'.format(self.name, int(self.split_ratio[0] * 10), int(self.split_ratio[1] * 10))
+            self.save_path, '{}-{}{}.bin'.format(
+                self.name, int(self.split_ratio[0] * 10), int(self.split_ratio[1] * 10)
+            )
         )
         if not os.path.exists(path):
             raise FileNotFoundError('file not found')

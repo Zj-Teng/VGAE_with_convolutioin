@@ -227,23 +227,29 @@ def test(model, dst, turn, file, threshold, feats):
 
 
 def main():
-    datsets = ['Non-Specific Dataset', 'Specific Dataset', 'STRING Dataset']
-    cell_type = ['hESC', 'hHEP', 'mDC', 'mESC', 'mHSC-E', 'mHSC-GM', 'mHSC-L']
+    # datsets = ['Non-Specific Dataset', 'Specific Dataset', 'STRING Dataset']
+    # cell_type = ['hESC', 'hHEP', 'mDC', 'mESC', 'mHSC-E', 'mHSC-GM', 'mHSC-L']
+    datsets = ['Lofgof Dataset']
+    cell_type = ['mESC']
     n_tf = ['TFs500', 'TFs1000']
-    dataset_names = ['Non-Specific', 'Specific', 'STRING']
+    # n_tf = ['TFs500']
+    # dataset_names = ['Non-Specific', 'Specific', 'STRING']
+    dataset_names = ['Lofgof']
     tf = ['500', '1000']
+    # tf = ['500']
     exp_file = 'ExpressionData.csv'
     net_file = 'network.csv'
     root_dir = 'data/raw/Benchmark Dataset'
     save_dir = './data/processed'
     threshold = 0.
     turn = 50
-    split_ratios = [
-        [0.1, 0.9], [0.2, 0.8], [0.3, 0.7], [0.4, 0.6], [0.5, 0.5]
-    ]
+    # split_ratios = [
+    #     [0.1, 0.9], [0.2, 0.8], [0.3, 0.7], [0.4, 0.6], [0.5, 0.5], [0.6, 0.4]
+    # ]
+    split_ratios = [[0.6, 0.4]]
 
     raw_dirs = [os.path.join(root_dir, d, c, t) for d in datsets for c in cell_type for t in n_tf]
-    file_names = ['{}-{}{}'.format(d, c, t) for d in dataset_names for c in cell_type for t in tf]
+    file_names = ['{}-{}{}_dot_decoder'.format(d, c, t) for d in dataset_names for c in cell_type for t in tf]
 
     for raw_dir, file_name in zip(raw_dirs, file_names):
         for split_ratio in split_ratios:
@@ -258,7 +264,7 @@ def main():
                 in_feats=feat, out_feats=feat, hidden_feats=feat, n_gene=n_gene
             ).to(CONFIG.DEVICE)
             model_checkpoint = os.path.join(
-                save_dir, file_name, 'model{}{}.pt'.format(int(split_ratio[0]*10), int(split_ratio[1]*10))
+                save_dir, file_name, 'model{}{}_dot_decoder.pt'.format(int(split_ratio[0]*10), int(split_ratio[1]*10))
             )
             stopper = EarlyStopping(patience=20, save_path=model_checkpoint)
 
@@ -272,7 +278,7 @@ def main():
             model.eval()
 
             file = os.path.join(
-                save_dir, file_name, 'metric{}{}.txt'.format(int(split_ratio[0]*10), int(split_ratio[1]*10))
+                save_dir, file_name, 'metric{}{}_dot_decoder.txt'.format(int(split_ratio[0]*10), int(split_ratio[1]*10))
             )
             test(model=model, dst=dst, turn=turn, file=file, threshold=threshold, feats=feats)
 

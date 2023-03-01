@@ -56,8 +56,21 @@ class InferNet(nn.Module):
 
     def decoder(self, z):
 
-        adj_rec = _self_conv(z, z)
-        adj_rec = self.linear(adj_rec)
+        # adj_rec = _self_conv(z, z)
+        adj_rec = self.dot_decoder(z)
+        # adj_rec = self.linear(adj_rec)
+        # adj_rec = self.causal_inference_decoder(z)
+
+        return adj_rec
+
+    def dot_decoder(self, z):
+        adj_rec = torch.matmul(z, torch.transpose(z, 0, 1))
+
+        return adj_rec
+
+    def causal_inference_decoder(self, z):
+        adj_rec = torch.matmul(z, torch.transpose(z, 0, 1))
+        adj_rec = torch.sigmoid(adj_rec)
 
         return adj_rec
 
@@ -122,6 +135,9 @@ class DenseNet(nn.Module):
 
 
 class GATAutoEncoder(nn.Module):
+    """
+    no use and need to be research.
+    """
 
     def __init__(self, in_feats, hidden_feats, out_feats, num_head):
         super(GATAutoEncoder, self).__init__()
