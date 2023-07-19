@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as func
 
-from dgl.nn.pytorch.conv import SAGEConv, GATv2Conv, GraphConv
+from dgl.nn.pytorch.conv import SAGEConv, GATv2Conv
 from torch import nn
 from config import CONFIG
 
