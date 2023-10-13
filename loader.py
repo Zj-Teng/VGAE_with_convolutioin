@@ -77,7 +77,7 @@ class ScDataset(DGLDataset):
 
     def __init__(
             self, name: str = '', raw_dir: str = None, save_dir: str = None, force_reload: bool = False,
-            verbose: bool = True, exp_file: str = None, net_file: str = None, split_ratio: list = None
+            verbose: bool = False, exp_file: str = None, net_file: str = None, split_ratio: list = None
     ):
         self.exp_file = os.path.join(raw_dir, exp_file)
         self.net_file = os.path.join(raw_dir, net_file)
