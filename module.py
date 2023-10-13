@@ -56,10 +56,8 @@ class InferNet(nn.Module):
 
     def decoder(self, z):
 
-        # adj_rec = _self_conv(z, z)
-        adj_rec = self.dot_decoder(z)
-        # adj_rec = self.linear(adj_rec)
-        # adj_rec = self.causal_inference_decoder(z)
+        adj_rec = _self_conv(z, z)
+        adj_rec = self.linear(adj_rec)
 
         return adj_rec
 
